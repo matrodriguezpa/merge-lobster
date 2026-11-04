@@ -39,12 +39,15 @@ button[aria-pressed="true"]{background:var(--acc);color:#fff}
 #pad.show{display:grid}
 #pad button{width:64px;height:64px;font-size:22px;padding:0}
 small{color:var(--mut);text-align:center;max-width:var(--s)}
+button:disabled{opacity:.4;cursor:default}
+.tile.sel img{filter:drop-shadow(0 0 7px #2f7fd1) drop-shadow(0 0 2px #2f7fd1)}
 </style>
 </head>
 <body>
 <div class="app">
   <header>
     <h1>Merge Lobster</h1>
+    <button id="hd" aria-pressed="false" title="Mano: mover una ficha donde quieras">✋ Mano</button>
     <button id="tg" aria-pressed="false" title="Mostrar botones de dirección">🎮 Botones</button>
     <button id="rs" title="Reiniciar">↻</button>
   </header>
@@ -61,7 +64,7 @@ small{color:var(--mut);text-align:center;max-width:var(--s)}
     <button data-d="3" style="grid-area:d" aria-label="Abajo">▼</button>
     <button data-d="1" style="grid-area:r" aria-label="Derecha">▶</button>
   </div>
-  <small>Desliza para mover. Une fichas iguales; la del centro es fija: llévale una igual para subirla de nivel.</small>
+  <small>Desliza para mover. Une fichas iguales; la del centro es fija: llévale una igual para subirla de nivel. ✋ Mano: toca una ficha y luego otra celda para moverla o intercambiarla (ganas un uso cada vez que subes el centro).</small>
   <small>Inspirado en el vídeo de @lobster.meme</small>
 </div>
 <script>
@@ -70,7 +73,7 @@ const NAMES=["","Labios","Gato-pez","Pez con zapatillas","Langosta","Pulpo azul"
 const N=9,C=4,WIN=6;
 const LINES=[[[0,1,2],[3,4,5],[6,7,8]],[[2,1,0],[5,4,3],[8,7,6]],[[0,3,6],[1,4,7],[2,5,8]],[[6,3,0],[7,4,1],[8,5,2]]];
 const $=id=>document.getElementById(id), board=$("board");
-let lv,els,moves,busy,over;
+let lv,els,moves,busy,over,hands=2,hand=false,sel=null,stuck=false;
 IMG.forEach(s=>{if(s)new Image().src=s});
 // leyenda de evolución
 $("legend").innerHTML=IMG.slice(1).map((s,i)=>`<img src="${s}" alt="${NAMES[i+1]}">`).join("<i>▸</i>");
@@ -80,7 +83,8 @@ function pop(d){d.classList.remove("pop");void d.offsetWidth;d.classList.add("po
 function mk(i,l,p){const d=document.createElement("div");d.className="tile"+(p?" pop":"");const im=new Image();im.src=IMG[l];im.alt=NAMES[l];im.draggable=false;d.appendChild(im);place(d,i);board.appendChild(d);return d}
 function ui(){
   $("mv").textContent="Movimientos: "+moves;
-  $("lvl").textContent="Centro: "+NAMES[lv[C]];
+  $("lvl").textContent="Centro: "+NAMES[lv[C]]+(stuck?" · ¡Atascado! Usa ✋":"");
+  $("hd").textContent="✋ Mano ×"+hands;$("hd").disabled=hands<=0&&!hand;
   [...$("legend").querySelectorAll("img")].forEach((im,i)=>im.classList.toggle("on",i+1===lv[C]));
 }
 
@@ -119,27 +123,60 @@ function move(d){
   for(let i=0;i<N;i++)if(els[i]&&!p.mv.some(m=>m.f===i))ne[i]=els[i];
   setTimeout(()=>{
     gone.forEach(e=>e.remove());
-    p.up.forEach(i=>{ne[i].firstChild.src=IMG[p.ng[i]];ne[i].firstChild.alt=NAMES[p.ng[i]];pop(ne[i]);if(i===C){const c=document.querySelector(".core");c.classList.remove("fl");void c.offsetWidth;c.classList.add("fl")}});
+    p.up.forEach(i=>{ne[i].firstChild.src=IMG[p.ng[i]];ne[i].firstChild.alt=NAMES[p.ng[i]];pop(ne[i]);if(i===C){hands=Math.min(3,hands+1);const c=document.querySelector(".core");c.classList.remove("fl");void c.offsetWidth;c.classList.add("fl")}});
     lv=p.ng;els=ne;settle();
   },170);
 }
 
 function settle(){
   if(lv.some(l=>l>=WIN)){over=1;$("wimg").src=IMG[6];$("wtx").textContent="Llegaste a la cima en "+moves+" movimientos.";$("win").classList.add("show");ui();return}
-  // sin fusiones posibles (todos los niveles distintos): se rellenan los huecos con labios
-  const seen=new Set();let pair=false;
-  lv.forEach(l=>{if(l){if(seen.has(l))pair=true;seen.add(l)}});
-  if(!pair){lv.forEach((l,i)=>{if(!l){lv[i]=1;els[i]=mk(i,1,1)}})}
+  // si ninguna fusión es alcanzable, se rellenan los huecos con labios
+  if(!canMerge(lv)&&lv.includes(0))lv.forEach((l,i)=>{if(!l){lv[i]=1;els[i]=mk(i,1,1)}});
+  stuck=!canMerge(lv);
   ui();
-  if(![0,1,2,3].some(d=>plan(lv,d).ch)){over=1;$("lose").classList.add("show")}
+  if(stuck&&hands<=0){over=1;$("lose").classList.add("show")}
   busy=0;
+}
+
+// ¿se puede llegar a alguna fusión con movimientos normales? (búsqueda en anchura)
+function canMerge(g){
+  const seen=new Set([g.join()]),q=[g];
+  while(q.length&&seen.size<20000){
+    const s=q.shift();
+    for(let d=0;d<4;d++){
+      const p=plan(s,d);
+      if(p.up.length)return true;
+      if(p.ch){const k=p.ng.join();if(!seen.has(k)){seen.add(k);q.push(p.ng)}}
+    }
+  }
+  return seen.size>=20000;
+}
+
+// Habilidad Mano: mover una ficha a un hueco o intercambiar dos (el centro es fijo)
+function setHand(on){
+  if(sel!==null&&els[sel])els[sel].classList.remove("sel");
+  sel=null;hand=on&&hands>0;
+  $("hd").setAttribute("aria-pressed",hand);ui();
+}
+function tapHand(i){
+  if(busy||over||i===C)return;
+  if(sel===null){if(lv[i]){sel=i;els[i].classList.add("sel")}return}
+  const a=sel;els[a].classList.remove("sel");
+  if(i===a){sel=null;return}
+  sel=null;
+  [lv[a],lv[i]]=[lv[i],lv[a]];[els[a],els[i]]=[els[i],els[a]];
+  if(els[i])place(els[i],i);
+  if(els[a])place(els[a],a);
+  hands--;busy=1;setHand(false);
+  setTimeout(settle,170);
 }
 
 function start(){
   board.querySelectorAll(".tile").forEach(e=>e.remove());
   $("win").classList.remove("show");$("lose").classList.remove("show");
   lv=Array(N).fill(1);els=lv.map((l,i)=>mk(i,l,1));
-  moves=0;busy=0;over=0;ui();
+  moves=0;busy=0;over=0;hands=2;hand=false;sel=null;stuck=false;
+  $("hd").setAttribute("aria-pressed","false");ui();
 }
 
 // Entrada: deslizar (táctil o ratón), teclado y botones
@@ -148,7 +185,10 @@ addEventListener("pointerdown",e=>{sx=e.clientX;sy=e.clientY;sid=e.pointerId;onB
 addEventListener("pointerup",e=>{
   if(sid!==e.pointerId||onBtn)return;sid=null;
   const dx=e.clientX-sx,dy=e.clientY-sy;
-  if(Math.max(Math.abs(dx),Math.abs(dy))<28)return;
+  if(Math.max(Math.abs(dx),Math.abs(dy))<28){
+    if(hand){const r=board.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;if(x>=0&&x<1&&y>=0&&y<1)tapHand(Math.floor(y*3)*3+Math.floor(x*3))}
+    return;
+  }
   move(Math.abs(dx)>Math.abs(dy)?(dx<0?0:1):(dy<0?2:3));
 });
 addEventListener("pointercancel",()=>{sid=null});
@@ -160,6 +200,7 @@ $("pad").querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>mo
 function setPad(on){$("pad").classList.toggle("show",on);$("tg").setAttribute("aria-pressed",on);try{localStorage.setItem("ml-pad",on?"1":"0")}catch(e){}}
 $("tg").addEventListener("click",()=>setPad(!$("pad").classList.contains("show")));
 $("rs").addEventListener("click",start);
+$("hd").addEventListener("click",()=>setHand(!hand));
 document.querySelectorAll(".again").forEach(b=>b.addEventListener("click",start));
 try{if(localStorage.getItem("ml-pad")==="1")setPad(true)}catch(e){}
 start();
